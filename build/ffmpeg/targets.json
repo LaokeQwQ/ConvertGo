@@ -1,0 +1,10 @@
+{
+  "darwin-amd64": {"arch":"x86_64","system":"Darwin","host":"x86_64-apple-darwin","cpu_family":"x86_64","hardware":["videotoolbox"]},
+  "darwin-arm64": {"arch":"aarch64","system":"Darwin","host":"aarch64-apple-darwin","cpu_family":"aarch64","hardware":["videotoolbox"]},
+  "windows-386": {"arch":"x86","system":"Windows","host":"i686-w64-mingw32","cpu_family":"x86","hardware":[]},
+  "windows-amd64": {"arch":"x86_64","system":"Windows","host":"x86_64-w64-mingw32","cpu_family":"x86_64","hardware":["nvenc"]},
+  "windows-arm64": {"arch":"aarch64","system":"Windows","host":"aarch64-w64-mingw32","cpu_family":"aarch64","hardware":[]},
+  "linux-386": {"arch":"x86","system":"Linux","host":"i686-linux-gnu","cpu_family":"x86","hardware":[]},
+  "linux-amd64": {"arch":"x86_64","system":"Linux","host":"x86_64-linux-gnu","cpu_family":"x86_64","hardware":["nvenc"]},
+  "linux-arm64": {"arch":"aarch64","system":"Linux","host":"aarch64-linux-gnu","cpu_family":"aarch64","hardware":[]}
+}

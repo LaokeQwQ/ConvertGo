@@ -1,0 +1,10 @@
+{
+  "strictness": 2,
+  "commentTypes": ["logic", "syntax"],
+  "autoReview": ["open", "push"],
+  "triggerOnDrafts": false,
+  "excludeAuthors": ["dependabot[bot]"],
+  "includeBranches": ["dev", "master"],
+  "ignorePatterns": "frontend/wailsjs/**\nfrontend/dist/**\nfrontend/node_modules/**",
+  "instructions": "请用简体中文报告具体的逻辑、安全、并发、仅本地网络边界和许可证缺陷；忽略纯格式或风格意见。"
+}

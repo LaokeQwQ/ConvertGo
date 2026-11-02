@@ -1,0 +1,66 @@
+ConvertGo bundled FFmpeg third-party notices
+============================================
+
+ConvertGo executes FFmpeg and ffprobe as separate local programs. These
+notices describe those programs and their bundled dependencies. They do
+not assign a license to the ConvertGo application itself.
+
+The bundled FFmpeg build enables GPL components, including libx264 and
+libx265, and is distributed with corresponding source. It is not a
+nonfree FFmpeg build. FFmpeg is provided without warranty to the extent
+permitted by the applicable licenses. The complete upstream license texts,
+copyright notices and authorship files are included under licenses/;
+the exact corresponding source archives are under sources/. Preserve
+those materials when redistributing this bundle.
+
+The source lockfile and build-info.json identify the exact source version,
+URL and SHA-256 for every library actually used by the current target:
+
+  FFmpeg       GPL-2.0-or-later
+  x264         GPL-2.0-or-later
+  x265         GPL-2.0-or-later
+  libvpx       BSD-3-Clause
+  Opus         BSD-3-Clause
+  LAME         LGPL-2.0-or-later
+  zlib         Zlib
+  Expat        MIT
+  FreeType     FreeType Project License (FTL)
+  FriBidi      LGPL-2.1-or-later
+  HarfBuzz     MIT-style licenses, see its complete upstream notices
+  Fontconfig   MIT-style license (Linux targets only)
+  nv-codec-headers  MIT (Linux amd64 and Windows amd64 only)
+
+Some upstream trees include additional files with their own notices. The
+complete source archives and copied upstream license files, not this short
+index, are authoritative for those terms and copyright attributions.
+
+FreeType acknowledgement: Portions of this software are copyright
+The FreeType Project (www.freetype.org). All rights reserved.
+
+Windows builds use the source-pinned LLVM-MinGW toolchain. Runtime license
+files from that exact toolchain are included under licenses/llvm-mingw/.
+Corresponding LLVM 20.1.8 libc++/libc++abi/libunwind/compiler-rt sources,
+the exact MinGW-w64 source commit and matching toolchain build scripts are
+also included. LLVM components use Apache-2.0 with the LLVM exception;
+MinGW-w64 contains multiple permissive licenses, preserved in its source
+and copied notices. The Microsoft UCRT is supplied by Windows itself.
+macOS system frameworks and Linux system libraries/fonts are platform
+requirements, not redistributed proprietary encoder SDKs.
+
+To rebuild or modify the bundled programs, read BUILDING.txt and the
+build-recipe/ directory. The distributed metadata contains every FFmpeg
+configure argument and external-library build command. No private keys or
+generated binaries are committed to the source repository. The release
+workflow verifies upstream archives before building and ships those same
+archives beside the binaries.
+
+FFmpeg upstream and legal guidance:
+  https://ffmpeg.org/
+  https://ffmpeg.org/legal.html
+The individual upstream URLs are recorded in sources.lock.json and in
+this target's build-info.json.
+
+Codec patent licensing, if applicable in a user's jurisdiction, is distinct
+from these software copyright licenses. No patent license, proprietary GPU
+SDK redistribution right, Apple Developer ID identity, notarization or
+Microsoft Authenticode signature is asserted by this bundle.

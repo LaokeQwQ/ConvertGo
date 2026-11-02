@@ -1,0 +1,155 @@
+ConvertGo FFmpeg source bundle and rebuild instructions
+====================================================
+
+Scope
+-----
+These recipes build FFmpeg and ffprobe as separate executables. They do not
+link FFmpeg libraries into ConvertGo. This document and the third-party
+notices concern the FFmpeg bundle, not the ConvertGo application license.
+
+The eight configured targets are darwin-amd64, darwin-arm64, windows-386,
+windows-amd64, windows-arm64, linux-386, linux-amd64 and linux-arm64.
+Configuration is not a support certification. A release is blocked until
+each target starts its application and probes/converts a local file using
+its matching sidecars. Full interactive workflow and physical GPU checks
+remain separate acceptance work.
+
+Sources and integrity
+---------------------
+sources.lock.json pins every upstream source URL, version or commit and
+SHA-256. Every downloaded archive is checked before extraction. Each bundle
+includes the exact archives used under sources/, unmodified source license
+files under licenses/, build-recipe/, build-info.json and SHA256SUMS.
+Build-info records the exact FFmpeg configure argument list, every external
+library's version/source/hash, actual compiler/tool versions and every build
+command. Paths in those recorded commands describe the original builder;
+run the enclosed recipe to substitute your local checkout paths.
+No prebuilt FFmpeg binary, proprietary encoder SDK, private signing key or
+media file belongs in Git.
+
+Required build tools
+--------------------
+Python 3.11 or newer with tarfile's data extraction filter (security-backported
+distribution builds qualify), a C/C++ compiler, GNU make, CMake, Ninja, Meson, pkg-config, autoconf, automake,
+libtool and nasm. A build needs HTTPS access to the exact upstream source
+URLs in the lockfile. CMake's static-library settings and the isolated
+PKG_CONFIG_LIBDIR prevent accidental use of host codec-library packages.
+System compiler/OS libraries remain platform prerequisites.
+
+macOS builds run natively with the Xcode command line tools and a macOS 12
+minimum deployment target, matching the Go 1.26 runtime baseline.
+GNU-compatible make must be available as make. Linux amd64/arm64 builds run
+in native Ubuntu 24.04 userlands (glibc 2.39 baseline). The application uses
+the webkit2_41 build tag. Linux i386 has a Debian 12/glibc 2.36 baseline.
+Linux i386 uses the pinned Debian bookworm i386 image in release.yml and
+linux-386.sh, installs the same Go version as go.mod from go.dev after
+checking its SHA-256, and runs a 32-bit Wails CLI with -platform linux.
+Wails' explicit linux/386 CLI target is not in its allowlist; native linux
+selects the CLI's GOARCH instead.
+
+Windows builds run on Linux x86_64 with the exact LLVM-MinGW archive and
+SHA-256 pinned in build.py. C++ and MinGW support runtimes are linked
+statically; the Microsoft UCRT is supplied by Windows, not redistributed.
+Windows 10+ and a separately installed WebView2 Runtime are required. The
+Wails build uses -webview2 error, never an automatic runtime download.
+Matching LLVM 20.1.8 runtime-component source archives, the exact MinGW-w64
+commit archive and the 20250709 toolchain build scripts are source-pinned
+and included in Windows bundles, along with the toolchain runtime notices.
+The toolchain recipe pins LLVM_VERSION=llvmorg-20.1.8 and
+MINGW_W64_VERSION=a0e69f7bc83a29b40e68355aac3e0c39b113b20f. Its build-all.sh
+can rebuild the compiler/support runtimes; source component archives retain
+their original upstream layout and can be substituted into that checkout.
+NSIS is required to generate the per-architecture Windows installer.
+
+Rebuild the FFmpeg sidecars
+--------------------------
+Start in a clean ConvertGo checkout (or recreate its build/ffmpeg directory
+from build-recipe/), on the target native userland described above:
+
+  python3 build/ffmpeg/build.py --target linux-amd64
+
+Substitute the desired target. The default result is:
+
+  resources/ffmpeg/<os>-<arch>/ffmpeg[.exe]
+  resources/ffmpeg/<os>-<arch>/ffprobe[.exe]
+
+The builder refuses to overwrite an existing result. For a clean rebuild,
+remove only generated resources/ffmpeg/<target> and build/ffmpeg/_work/<target>.
+Downloaded archives remain in build/ffmpeg/_cache and are rehashed on reuse.
+An alternate destination can be supplied with --output PATH. Use --jobs N
+to bound compilation parallelism.
+
+Codec and backend configuration
+-------------------------------
+All targets explicitly enable GPL code, libx264 and libx265. The source set
+also supplies libvpx VP9, libopus, libmp3lame, libass, FreeType, FriBidi,
+HarfBuzz, zlib and Expat. Linux adds Fontconfig and uses the distribution's
+/etc/fonts configuration and installed fonts. Windows uses DirectWrite;
+macOS uses CoreText. Assembly optimizations in x264/x265 and libass are
+intentionally disabled for a portable initial source-build configuration;
+libvpx uses its generic compiler target. No speed benchmark is implied.
+
+The recipe never enables nonfree. Network protocols, device inputs, ffplay
+and dependency autodetection are disabled. Required libraries are selected
+explicitly and linked from the isolated static prefix. FFmpeg's built-in
+AAC/FLAC encoders and ordinary file demuxers/muxers remain available.
+
+macOS enables VideoToolbox and AudioToolbox. Linux amd64 and Windows amd64
+enable NVENC using the source-pinned redistributable nv-codec-headers only;
+no CUDA toolkit or proprietary SDK is redistributed. NVDEC, CUVID and CUDA
+LLVM compilation are disabled. NVIDIA driver/GPU availability is checked
+by the application, not inferred from these compile flags. QSV, AMF and
+VAAPI are intentionally absent: their target-specific build dependencies
+are not part of this locked recipe. Other architectures do not claim NVENC.
+
+Release packaging
+-----------------
+release.py builds the project-pinned Wails version and takes --version and
+--repository. It embeds main.version and main.githubRepository using linker
+flags, and packages the exact matching sidecar directory. Linux archives
+and Windows installations place resources/ next to the application;
+macOS places resources/ beside the executable inside Contents/MacOS.
+All platform assets contain the full corresponding FFmpeg/library source
+archives, notices, hashes, rebuild instructions and runtime prerequisites.
+
+macOS sidecars are ad-hoc signed before their hashes are regenerated, then
+the outer application is ad-hoc signed and placed in a DMG. No Developer ID
+signing/notarization is claimed. Windows installers are not Authenticode
+signed. No additional Actions signing secrets are consumed.
+
+The native smoke gate verifies required encoders, rejects network protocols,
+converts a two-second generated local clip to H.264/AAC, probes dimensions
+and duration, checks sidecar hashes and requires the actual GUI process to
+remain running for eight seconds. Linux uses Xvfb and a D-Bus session.
+Windows 386/amd64 smoke runs on x64 Windows; ARM64 runs on Windows ARM64.
+This is an execution gate, not proof of interactive GUI correctness or of
+hardware-encoder availability.
+
+Manifest signing and publication
+--------------------------------
+The workflow publishes only version tags reachable from protected master.
+The release environment should require a maintainer approval. Protect the
+version-tag namespace through repository rules as well. These repository
+settings cannot be established by editing this recipe.
+
+CONVERTGO_UPDATE_SIGNING_KEY is the only Actions secret referenced. Store
+the Ed25519 private key as PKCS#8 PEM, or base64-encoded 32-byte seed/64-byte
+private key. sign-manifest.mjs reads it only in memory, verifies the derived
+public key against the production updater key, and refuses missing or
+mismatched keys. It never writes a private-key file or includes the key in
+arguments, output, artifacts or the repository.
+
+The published manifest asset is update-manifest.json. Its exact fields are
+version, assets and signature. Each signed asset has fields in this order:
+os, arch, filename, url, sha256, size. Assets sort by os, arch, filename.
+The signed bytes are compact UTF-8 JSON of {version,assets}, fixed field
+order, HTML escaping disabled, with no signature and no trailing newline.
+The detached Ed25519 signature is base64. Asset URLs are canonical GitHub
+release URLs. A final newline on the published manifest is not signed.
+Every package's size/SHA-256 is recomputed immediately before signing;
+all eight target records and native smoke reports are mandatory.
+
+Upstream references
+-------------------
+FFmpeg source and legal guidance: https://ffmpeg.org/ and https://ffmpeg.org/legal.html
+All other exact source references appear in sources.lock.json and build-info.json.

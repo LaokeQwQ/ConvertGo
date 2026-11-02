@@ -1,0 +1,24 @@
+name: Master promotion
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions: {}
+
+jobs:
+  promotion-source-is-dev:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the repository dev branch as promotion source
+        env:
+          HEAD_REF: "${{ github.event.pull_request.head.ref }}"
+          HEAD_REPOSITORY: "${{ github.event.pull_request.head.repo.full_name }}"
+          BASE_REPOSITORY: "${{ github.repository }}"
+        run: |
+          if [[ "$HEAD_REF" != 'dev' || "$HEAD_REPOSITORY" != "$BASE_REPOSITORY" ]]; then
+            echo '::error::Pull requests to master must originate from the dev branch in this repository.'
+            exit 1
+          fi

@@ -1,0 +1,283 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed version tag on protected master
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "release-${{ inputs.tag || github.ref_name }}"
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a version tag reachable from protected master
+        id: version
+        env:
+          VERSION: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
+          git show-ref --verify "refs/tags/$VERSION"
+          git merge-base --is-ancestor "refs/tags/$VERSION^{commit}" origin/master
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$VERSION^{commit}")"
+          printf 'version=%s\n' "$VERSION" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  frontend:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build shared frontend assets
+        working-directory: frontend
+        run: npm ci && npm run build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-frontend
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: [prepare, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-amd64
+            runner: macos-15-intel
+            kind: native
+          - target: darwin-arm64
+            runner: macos-15
+            kind: native
+          - target: windows-386
+            runner: ubuntu-24.04
+            kind: windows
+          - target: windows-amd64
+            runner: ubuntu-24.04
+            kind: windows
+          - target: windows-arm64
+            runner: ubuntu-24.04
+            kind: windows
+          - target: linux-386
+            runner: ubuntu-24.04
+            kind: linux386
+          - target: linux-amd64
+            runner: ubuntu-24.04
+            kind: native
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            kind: native
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-frontend
+          path: frontend/dist
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Linux build and GUI smoke dependencies
+        if: runner.os == 'Linux' && matrix.kind != 'linux386'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build meson pkg-config nasm yasm \
+            autoconf automake libtool libgtk-3-dev libwebkit2gtk-4.1-dev xvfb xauth dbus-x11 \
+            fontconfig fonts-dejavu-core nsis
+      - name: Install macOS build dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja meson pkg-config nasm autoconf automake libtool
+      - name: Install the project-pinned Wails CLI
+        if: matrix.kind != 'linux386'
+        shell: bash
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@"$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
+      - name: Build GPL sidecars and native application
+        if: matrix.kind != 'linux386'
+        shell: bash
+        run: |
+          python3 build/ffmpeg/build.py --target "$TARGET"
+          python3 build/ffmpeg/release.py app --target "$TARGET" --version "$VERSION" --repository "$GITHUB_REPOSITORY"
+          python3 build/ffmpeg/release.py stage --target "$TARGET" --version "$VERSION"
+      - name: Package disk image, installer, or archive
+        if: matrix.kind != 'linux386'
+        shell: bash
+        run: python3 build/ffmpeg/release.py package --target "$TARGET" --version "$VERSION"
+      - name: Native macOS startup and local media gate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          python3 build/ffmpeg/smoke.py --target "$TARGET" --stage "build/ffmpeg/_stage/$TARGET" --report "dist/$TARGET.smoke.json"
+      - name: Native Linux startup and local media gate
+        if: startsWith(matrix.target, 'linux-') && matrix.kind == 'native'
+        shell: bash
+        run: |
+          dbus-run-session -- xvfb-run -a python3 build/ffmpeg/smoke.py \
+            --target "$TARGET" --stage "build/ffmpeg/_stage/$TARGET" --report "dist/$TARGET.smoke.json"
+      - name: Build and smoke Linux i386 in a native 32-bit userland
+        if: matrix.kind == 'linux386'
+        shell: bash
+        run: |
+          docker run --rm --platform linux/386 \
+            -e VERSION -e GITHUB_REPOSITORY -e GO_VERSION="$(go env GOVERSION)" \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
+            i386/debian@sha256:1472b213f4cb123795a81213f85cb700cdcb497f774584c727d113fb4f91f2c8 \
+            sh build/ffmpeg/linux-386.sh
+      - name: Preserve Windows stage for native acceptance
+        if: matrix.kind == 'windows'
+        shell: bash
+        run: |
+          mkdir -p build/ffmpeg/_transport
+          tar -czf "build/ffmpeg/_transport/$TARGET.tar.gz" -C "build/ffmpeg/_stage/$TARGET" .
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: matrix.kind == 'windows'
+        with:
+          name: "windows-stage-${{ matrix.target }}"
+          path: "build/ffmpeg/_transport/${{ matrix.target }}.tar.gz"
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: "release-assets-${{ matrix.target }}"
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-smoke:
+    needs: [prepare, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-386
+            runner: windows-2025
+          - target: windows-amd64
+            runner: windows-2025
+          - target: windows-arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: "windows-stage-${{ matrix.target }}"
+          path: transport
+      - name: Start matching application and probe local media
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          tar -xzf "transport/$env:TARGET.tar.gz" -C stage
+          python build/ffmpeg/smoke.py --target "$env:TARGET" --stage stage --report "dist/$env:TARGET.smoke.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: "release-smoke-${{ matrix.target }}"
+          path: dist/*.smoke.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build, windows-smoke]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-assets-*
+          merge-multiple: true
+          path: release-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-smoke-*
+          merge-multiple: true
+          path: release-assets
+      - name: Require native acceptance evidence for all eight targets
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          targets = json.loads(Path('build/ffmpeg/targets.json').read_text())
+          for target in targets:
+              report = json.loads((Path('release-assets') / (target + '.smoke.json')).read_text())
+              if report.get('target') != target or not all(report.get(field) is True for field in ('application_started', 'ffprobe_local_probe', 'h264_aac_conversion', 'sidecar_hashes')):
+                  raise SystemExit('native acceptance failed for ' + target)
+          PY
+      - name: Sign the canonical update manifest entirely in memory
+        env:
+          CONVERTGO_UPDATE_SIGNING_KEY: ${{ secrets.CONVERTGO_UPDATE_SIGNING_KEY }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node build/ffmpeg/sign-manifest.mjs release-assets "$VERSION" "$GITHUB_REPOSITORY"
+      - name: Publish the signed platform packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/$VERSION"
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$RELEASE_COMMIT"
+          cat > release-notes.txt <<'EOF'
+          Packages include matching GPL-enabled FFmpeg/ffprobe sidecars, exact corresponding FFmpeg/external-library sources, build recipes, SHA-256 hashes and notices.
+          Read RUNTIME-REQUIREMENTS.txt before installation. Linux needs GTK 3, WebKitGTK 4.1, libstdc++6, Fontconfig and fonts. Windows needs an already installed WebView2 Runtime. macOS images are ad-hoc signed, not Developer ID signed or notarized.
+          All eight targets passed the release startup/local-media gate. This is not a physical GPU certification or a full interactive conversion-workflow test.
+          EOF
+          options=()
+          if [[ "$VERSION" == *-* ]]; then options+=(--prerelease); fi
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "ConvertGo $VERSION" --notes-file release-notes.txt "${options[@]}" \
+            release-assets/ConvertGo-*.dmg release-assets/ConvertGo-*-setup.exe \
+            release-assets/ConvertGo-*-linux-*.tar.gz release-assets/update-manifest.json \
+            release-assets/SHA256SUMS release-assets/*.smoke.json
