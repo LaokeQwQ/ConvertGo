@@ -27,10 +27,10 @@ func testKeys(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return pub, priv
 }
 
-func testManifest(t *testing.T, priv ed25519.PrivateKey, url string, data []byte) []byte {
+func testManifest(t *testing.T, priv ed25519.PrivateKey, data []byte) []byte {
 	t.Helper()
 	sum := sha256.Sum256(data)
-	m := Manifest{Version: "v1.2.3", Assets: []Asset{{OS: runtime.GOOS, Arch: runtime.GOARCH, Filename: "package", URL: url, SHA256: fmt.Sprintf("%x", sum[:]), Size: int64(len(data))}}}
+	m := Manifest{Version: "v1.2.3", Assets: []manifestAsset{{OS: runtime.GOOS, Arch: runtime.GOARCH, Filename: "package", SHA256: fmt.Sprintf("%x", sum[:]), Size: int64(len(data))}}}
 	sig, err := signManifest(m, priv)
 	if err != nil {
 		t.Fatal(err)
@@ -62,15 +62,15 @@ func TestCheckAndDownloadValidSignedManifest(t *testing.T) {
 	var server *httptest.Server
 	server = testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/manifest.json":
-			_, _ = w.Write(testManifest(t, priv, server.URL+"/package", payload))
+		case "/update-manifest.json":
+			_, _ = w.Write(testManifest(t, priv, payload))
 		case "/package":
 			_, _ = w.Write(payload)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
-	source := sourceForTest(server.URL+"/manifest.json", pub, server)
+	source := sourceForTest(server.URL, pub, server)
 	release, err := Check(context.Background(), "owner/repo", source)
 	if err != nil {
 		t.Fatal(err)
@@ -91,11 +91,11 @@ func TestCheckAndDownloadValidSignedManifest(t *testing.T) {
 func TestCheckRejectsManifestTampering(t *testing.T) {
 	pub, priv := testKeys(t)
 	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		b := testManifest(t, priv, "https://github.com/owner/repo/releases/download/v1/package", []byte("x"))
+		b := testManifest(t, priv, []byte("x"))
 		b = []byte(strings.Replace(string(b), `"version":"v1.2.3"`, `"version":"v9.9.9"`, 1))
 		_, _ = w.Write(b)
 	}))
-	_, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL+"/manifest.json", pub, server))
+	_, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL, pub, server))
 	if err == nil {
 		t.Fatal("tampered manifest was accepted")
 	}
@@ -106,13 +106,13 @@ func TestDownloadRejectsWrongTarget(t *testing.T) {
 	payload := []byte("package")
 	var server *httptest.Server
 	server = testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/manifest.json" {
-			_, _ = w.Write(testManifest(t, priv, server.URL+"/package", payload))
+		if r.URL.Path == "/update-manifest.json" {
+			_, _ = w.Write(testManifest(t, priv, payload))
 			return
 		}
 		_, _ = w.Write(payload)
 	}))
-	release, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL+"/manifest.json", pub, server))
+	release, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL, pub, server))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,14 +132,14 @@ func TestCheckRejectsDisallowedRedirect(t *testing.T) {
 		w.Header().Set("Location", outside.URL)
 		w.WriteHeader(http.StatusFound)
 	}))
-	_, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL+"/manifest.json", pub, server))
+	_, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL, pub, server))
 	if err == nil {
 		t.Fatal("disallowed redirect was followed")
 	}
 }
 
 func TestMirrorSourceAllowsOnlyItsOriginAndGitHubReleaseHosts(t *testing.T) {
-	source := UpdateSource{Kind: SourceMirror, MirrorURL: "https://mirror.example/manifest.json"}
+	source := UpdateSource{Kind: SourceMirror, MirrorURL: "https://mirror.example"}
 	client, err := newHTTPClient(source)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestMirrorSourceAllowsOnlyItsOriginAndGitHubReleaseHosts(t *testing.T) {
 }
 
 func TestManifestRejectsPathUnsafeVersion(t *testing.T) {
-	encoded, err := json.Marshal(Manifest{Version: "../v1.2.3", Assets: []Asset{{Filename: "app.zip"}}, Signature: "signature"})
+	encoded, err := json.Marshal(Manifest{Version: "../v1.2.3", Assets: []manifestAsset{{Filename: "app.zip"}}, Signature: "signature"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,18 +185,18 @@ func TestCheckAndDownloadEnforceSizeLimits(t *testing.T) {
 	payload := []byte("package")
 	var server *httptest.Server
 	server = testServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/manifest.json" {
-			_, _ = w.Write(testManifest(t, priv, server.URL+"/package", payload))
+		if r.URL.Path == "/update-manifest.json" {
+			_, _ = w.Write(testManifest(t, priv, payload))
 			return
 		}
 		_, _ = w.Write(payload)
 	}))
-	release, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL+"/manifest.json", pub, server))
+	release, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL, pub, server))
 	if err != nil {
 		t.Fatal(err)
 	}
 	release.Assets[0].Size = maxAssetSize + 1
-	manifest := Manifest{Version: release.Version, Assets: release.Assets}
+	manifest := Manifest{Version: release.Version, Assets: []manifestAsset{signedAsset(release.Assets[0])}}
 	sig, err := signManifest(manifest, priv)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +208,7 @@ func TestCheckAndDownloadEnforceSizeLimits(t *testing.T) {
 }
 
 func TestEmptyMirrorResetsToGitHubSource(t *testing.T) {
-	source := UpdateSource{Kind: SourceMirror, MirrorURL: "https://mirror.example/manifest.json"}
+	source := UpdateSource{Kind: SourceMirror, MirrorURL: "https://mirror.example"}
 	source.Reset()
 	if source.MirrorURL != "" {
 		t.Fatalf("mirror remains configured: %q", source.MirrorURL)
@@ -223,14 +223,14 @@ func TestCheckRejectsOversizedManifest(t *testing.T) {
 	server := testServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(make([]byte, maxManifestSize+1))
 	}))
-	if _, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL+"/manifest.json", pub, server)); err == nil {
+	if _, err := Check(context.Background(), "owner/repo", sourceForTest(server.URL, pub, server)); err == nil {
 		t.Fatal("oversized manifest was accepted")
 	}
 }
 
 func TestManifestSignatureEncodingIsDeterministic(t *testing.T) {
 	pub, priv := testKeys(t)
-	m := Manifest{Version: "v1.0.0", Assets: []Asset{{OS: "z", Arch: "a", Filename: "z", URL: "https://github.com/a", SHA256: strings.Repeat("0", 64), Size: 1}, {OS: "a", Arch: "z", Filename: "a", URL: "https://github.com/b", SHA256: strings.Repeat("1", 64), Size: 1}}}
+	m := Manifest{Version: "v1.0.0", Assets: []manifestAsset{{OS: "z", Arch: "a", Filename: "z", SHA256: strings.Repeat("0", 64), Size: 1}, {OS: "a", Arch: "z", Filename: "a", SHA256: strings.Repeat("1", 64), Size: 1}}}
 	sig, err := signManifest(m, priv)
 	if err != nil {
 		t.Fatal(err)
@@ -246,10 +246,20 @@ func TestManifestSignatureEncodingIsDeterministic(t *testing.T) {
 	if strings.Contains(string(encoded), "signature") {
 		t.Fatal("signature included in signed encoding")
 	}
+	if strings.Contains(string(encoded), `"url"`) {
+		t.Fatal("asset download URL must not be included in the signed manifest")
+	}
 	if strings.HasSuffix(string(encoded), "\n") {
 		t.Fatal("canonical signed payload has a trailing newline")
 	}
 	if strings.Index(string(encoded), `"os":"a"`) > strings.Index(string(encoded), `"os":"z"`) {
 		t.Fatal("assets were not sorted before signing")
+	}
+}
+
+func TestManifestRejectsAssetURLField(t *testing.T) {
+	data := []byte(`{"version":"v1.2.3","assets":[{"os":"linux","arch":"amd64","filename":"package.tar.gz","url":"https://github.com/owner/repo/package.tar.gz","sha256":"` + strings.Repeat("0", 64) + `","size":1}],"signature":"signature"}`)
+	if _, err := decodeManifest(data); err == nil {
+		t.Fatal("manifest containing an unapproved asset URL field was accepted")
 	}
 }

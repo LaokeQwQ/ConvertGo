@@ -47,8 +47,7 @@ for (const name of (await readdir(directory)).filter(name => name.endsWith('.ass
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   const sha256 = hash.digest('hex');
   if (sha256 !== record.sha256 || size !== record.size) throw new Error('release asset bytes changed after packaging');
-  const url = `https://github.com/${repository}/releases/download/${version}/${filename}`;
-  entries.push({ os, arch, filename, url, sha256, size });
+  entries.push({ os, arch, filename, sha256, size });
 }
 entries.sort((a, b) => {
   for (const field of ['os', 'arch', 'filename']) {

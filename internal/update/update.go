@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -73,10 +74,22 @@ type Asset struct {
 	Size     int64  `json:"size"`
 }
 
+type manifestAsset struct {
+	OS       string `json:"os"`
+	Arch     string `json:"arch"`
+	Filename string `json:"filename"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
+}
+
 type Manifest struct {
-	Version   string  `json:"version"`
-	Assets    []Asset `json:"assets"`
-	Signature string  `json:"signature"`
+	Version   string          `json:"version"`
+	Assets    []manifestAsset `json:"assets"`
+	Signature string          `json:"signature"`
+}
+
+func signedAsset(asset Asset) manifestAsset {
+	return manifestAsset{OS: asset.OS, Arch: asset.Arch, Filename: asset.Filename, SHA256: asset.SHA256, Size: asset.Size}
 }
 
 // Release contains the signed manifest data returned by Check. Signature is
@@ -112,7 +125,10 @@ func Check(ctx context.Context, repository string, source UpdateSource) (Release
 			return Release{}, err
 		}
 	} else {
-		manifestURL = source.MirrorURL
+		manifestURL, err = mirrorManifestURL(source.MirrorURL)
+		if err != nil {
+			return Release{}, fmt.Errorf("invalid update mirror base URL: %w", err)
+		}
 	}
 	manifestLocation, err := parseHTTPSURL(manifestURL)
 	if err != nil {
@@ -151,12 +167,22 @@ func Check(ctx context.Context, repository string, source UpdateSource) (Release
 	if err := verifyManifest(manifest, pub); err != nil {
 		return Release{}, err
 	}
-	for _, asset := range manifest.Assets {
+	assets := make([]Asset, len(manifest.Assets))
+	for i, record := range manifest.Assets {
+		asset := Asset{OS: record.OS, Arch: record.Arch, Filename: record.Filename, SHA256: record.SHA256, Size: record.Size}
 		if err := validateAsset(asset, source); err != nil {
 			return Release{}, err
 		}
+		asset.URL, err = siblingAssetURL(manifestURL, asset.Filename)
+		if err != nil {
+			return Release{}, fmt.Errorf("derive update asset URL: %w", err)
+		}
+		if err := validateAsset(asset, source); err != nil {
+			return Release{}, err
+		}
+		assets[i] = asset
 	}
-	return Release{Version: manifest.Version, Assets: manifest.Assets, Signature: manifest.Signature, publicKey: append(ed25519.PublicKey(nil), pub...), source: source}, nil
+	return Release{Version: manifest.Version, Assets: assets, Signature: manifest.Signature, publicKey: append(ed25519.PublicKey(nil), pub...), source: source}, nil
 }
 
 // Download verifies the signed release, selects the exact runtime target, then
@@ -168,7 +194,11 @@ func Download(ctx context.Context, release Release, target RuntimeTarget, dst st
 	if target.OS == "" || target.Arch == "" {
 		return errors.New("runtime target is incomplete")
 	}
-	manifest := Manifest{Version: release.Version, Assets: release.Assets, Signature: release.Signature}
+	assets := make([]manifestAsset, len(release.Assets))
+	for i, asset := range release.Assets {
+		assets[i] = signedAsset(asset)
+	}
+	manifest := Manifest{Version: release.Version, Assets: assets, Signature: release.Signature}
 	pub := release.publicKey
 	if len(pub) == 0 {
 		var err error
@@ -343,6 +373,9 @@ func validateAsset(a Asset, source UpdateSource) error {
 	if _, err := hexDecode(a.SHA256); err != nil {
 		return errors.New("manifest asset SHA-256 is invalid")
 	}
+	if a.URL == "" {
+		return nil
+	}
 	u, err := parseHTTPSURL(a.URL)
 	if err != nil {
 		return fmt.Errorf("manifest asset URL: %w", err)
@@ -351,6 +384,30 @@ func validateAsset(a Asset, source UpdateSource) error {
 		return fmt.Errorf("manifest asset host %q is outside the selected source", u.Host)
 	}
 	return nil
+}
+
+func mirrorManifestURL(base string) (string, error) {
+	u, err := parseHTTPSURL(base)
+	if err != nil {
+		return "", err
+	}
+	u.Path = path.Join(u.Path, manifestName)
+	u.RawPath = ""
+	return u.String(), nil
+}
+
+func siblingAssetURL(manifestURL, filename string) (string, error) {
+	if filename == "" || strings.ContainsAny(filename, "/\\\x00") {
+		return "", errors.New("manifest asset filename is invalid")
+	}
+	u, err := parseHTTPSURL(manifestURL)
+	if err != nil {
+		return "", err
+	}
+	u.Path = path.Join(path.Dir(u.Path), filename)
+	u.RawPath = ""
+	u.RawQuery = ""
+	return u.String(), nil
 }
 
 func parseHTTPSURL(raw string) (*url.URL, error) {
@@ -442,7 +499,7 @@ func ensureJSONEOF(dec *json.Decoder) error {
 }
 
 func marshalManifest(m Manifest, omitSignature bool) ([]byte, error) {
-	assets := append([]Asset(nil), m.Assets...)
+	assets := append([]manifestAsset(nil), m.Assets...)
 	sort.Slice(assets, func(i, j int) bool {
 		a, b := assets[i], assets[j]
 		if a.OS != b.OS {
@@ -454,9 +511,9 @@ func marshalManifest(m Manifest, omitSignature bool) ([]byte, error) {
 		return a.Filename < b.Filename
 	})
 	value := struct {
-		Version   string  `json:"version"`
-		Assets    []Asset `json:"assets"`
-		Signature string  `json:"signature,omitempty"`
+		Version   string          `json:"version"`
+		Assets    []manifestAsset `json:"assets"`
+		Signature string          `json:"signature,omitempty"`
 	}{Version: m.Version, Assets: assets}
 	if !omitSignature {
 		value.Signature = m.Signature
