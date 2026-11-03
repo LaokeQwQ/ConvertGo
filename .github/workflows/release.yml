@@ -59,7 +59,7 @@ jobs:
       - name: Build shared frontend assets
         working-directory: frontend
         run: npm ci && npm run build
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-frontend
           path: frontend/dist
@@ -166,14 +166,14 @@ jobs:
         run: |
           mkdir -p build/ffmpeg/_transport
           tar -czf "build/ffmpeg/_transport/$TARGET.tar.gz" -C "build/ffmpeg/_stage/$TARGET" .
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.kind == 'windows'
         with:
           name: "windows-stage-${{ matrix.target }}"
           path: "build/ffmpeg/_transport/${{ matrix.target }}.tar.gz"
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "release-assets-${{ matrix.target }}"
           path: dist/*
@@ -212,7 +212,7 @@ jobs:
           tar -xzf "transport/$env:TARGET.tar.gz" -C stage
           python build/ffmpeg/smoke.py --target "$env:TARGET" --stage stage --report "dist/$env:TARGET.smoke.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "release-smoke-${{ matrix.target }}"
           path: dist/*.smoke.json
